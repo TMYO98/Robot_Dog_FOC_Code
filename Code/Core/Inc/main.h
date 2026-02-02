@@ -63,6 +63,19 @@ void Error_Handler(void);
 #define DE_RE_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
+// Motor control pins
+#define MOTOR_A_HIGH_Pin GPIO_PIN_15
+#define MOTOR_A_HIGH_GPIO_Port GPIOA
+#define MOTOR_A_LOW_Pin GPIO_PIN_3
+#define MOTOR_A_LOW_GPIO_Port GPIOB
+#define MOTOR_B_HIGH_Pin GPIO_PIN_6
+#define MOTOR_B_HIGH_GPIO_Port GPIOA
+#define MOTOR_B_LOW_Pin GPIO_PIN_7
+#define MOTOR_B_LOW_GPIO_Port GPIOA
+#define MOTOR_C_HIGH_Pin GPIO_PIN_9
+#define MOTOR_C_HIGH_GPIO_Port GPIOA
+#define MOTOR_C_LOW_Pin GPIO_PIN_8
+#define MOTOR_C_LOW_GPIO_Port GPIOA
 
 /* USER CODE END Private defines */
 

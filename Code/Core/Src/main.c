@@ -53,6 +53,10 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
+// Motor commutation state
+static uint8_t commutation_step = 0;
+// Commutation delay in milliseconds (adjust for speed)
+#define COMMUTATION_DELAY_MS 10
 
 /* USER CODE END PV */
 
@@ -67,7 +71,8 @@ static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
-
+void Motor_Commutation_Step(void);
+void Motor_Stop(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -112,7 +117,8 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  // Start timer for commutation (interrupt-based)
+  HAL_TIM_Base_Start_IT(&htim2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -399,18 +405,22 @@ static void MX_TIM2_Init(void)
   /* USER CODE END TIM2_Init 0 */
 
   TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM2_Init 1 */
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  // Configure for commutation timing
+  // System clock is 8MHz, timer clock is 8MHz
+  // Prescaler = 8000-1 gives timer frequency = 8MHz/8000 = 1kHz
+  // Period = 20-1 gives interrupt every 20ms = 50Hz commutation rate
+  // Adjust period to change speed: smaller period = faster commutation
+  htim2.Init.Prescaler = 1000 - 1;  // 8MHz / 8000 = 1kHz timer frequency
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
+  htim2.Init.Period = 20 - 1;       // 20ms period = 50Hz commutation (adjust for speed)
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_OC_Init(&htim2) != HAL_OK)
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -420,22 +430,9 @@ static void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_TIMING;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_OC_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_OC_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE BEGIN TIM2_Init 2 */
 
   /* USER CODE END TIM2_Init 2 */
-  HAL_TIM_MspPostInit(&htim2);
 
 }
 
@@ -563,11 +560,112 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
+  /*Configure Motor Control Pins as Outputs */
+  /* Motor Phase A: PA15 (high), PB3 (low) */
+  /* Motor Phase B: PA6 (high), PA7 (low) */
+  /* Motor Phase C: PA9 (high), PA8 (low) */
+  HAL_GPIO_WritePin(MOTOR_A_HIGH_GPIO_Port, MOTOR_A_HIGH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_A_LOW_GPIO_Port, MOTOR_A_LOW_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_B_HIGH_GPIO_Port, MOTOR_B_HIGH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_B_LOW_GPIO_Port, MOTOR_B_LOW_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_C_HIGH_GPIO_Port, MOTOR_C_HIGH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_C_LOW_GPIO_Port, MOTOR_C_LOW_Pin, GPIO_PIN_RESET);
+
+  GPIO_InitStruct.Pin = MOTOR_A_HIGH_Pin|MOTOR_B_HIGH_Pin|MOTOR_B_LOW_Pin|MOTOR_C_HIGH_Pin|MOTOR_C_LOW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;  // High speed for motor control
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = MOTOR_A_LOW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  if(htim->Instance == TIM2)
+  {
+    Motor_Commutation_Step();
+  }
+}
+
+/**
+  * @brief  Motor commutation step function - 6-step commutation
+  * @retval None
+  */
+void Motor_Commutation_Step(void)
+{
+  // Turn off all phases first
+  HAL_GPIO_WritePin(MOTOR_A_HIGH_GPIO_Port, MOTOR_A_HIGH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_A_LOW_GPIO_Port, MOTOR_A_LOW_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_B_HIGH_GPIO_Port, MOTOR_B_HIGH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_B_LOW_GPIO_Port, MOTOR_B_LOW_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_C_HIGH_GPIO_Port, MOTOR_C_HIGH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_C_LOW_GPIO_Port, MOTOR_C_LOW_Pin, GPIO_PIN_RESET);
+  
+  // 6-step commutation sequence
+  switch(commutation_step)
+  {
+    case 0: // Step 1: A+ B-
+      HAL_GPIO_WritePin(MOTOR_A_HIGH_GPIO_Port, MOTOR_A_HIGH_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(MOTOR_B_LOW_GPIO_Port, MOTOR_B_LOW_Pin, GPIO_PIN_SET);
+      break;
+      
+    case 1: // Step 2: A+ C-
+      HAL_GPIO_WritePin(MOTOR_A_HIGH_GPIO_Port, MOTOR_A_HIGH_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(MOTOR_C_LOW_GPIO_Port, MOTOR_C_LOW_Pin, GPIO_PIN_SET);
+      break;
+      
+    case 2: // Step 3: B+ C-
+      HAL_GPIO_WritePin(MOTOR_B_HIGH_GPIO_Port, MOTOR_B_HIGH_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(MOTOR_C_LOW_GPIO_Port, MOTOR_C_LOW_Pin, GPIO_PIN_SET);
+      break;
+      
+    case 3: // Step 4: B+ A-
+      HAL_GPIO_WritePin(MOTOR_B_HIGH_GPIO_Port, MOTOR_B_HIGH_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(MOTOR_A_LOW_GPIO_Port, MOTOR_A_LOW_Pin, GPIO_PIN_SET);
+      break;
+      
+    case 4: // Step 5: C+ A-
+      HAL_GPIO_WritePin(MOTOR_C_HIGH_GPIO_Port, MOTOR_C_HIGH_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(MOTOR_A_LOW_GPIO_Port, MOTOR_A_LOW_Pin, GPIO_PIN_SET);
+      break;
+      
+    case 5: // Step 6: C+ B-
+      HAL_GPIO_WritePin(MOTOR_C_HIGH_GPIO_Port, MOTOR_C_HIGH_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(MOTOR_B_LOW_GPIO_Port, MOTOR_B_LOW_Pin, GPIO_PIN_SET);
+      break;
+  }
+  
+  // Move to next step
+  commutation_step = (commutation_step + 1) % 6;
+}
+
+/**
+  * @brief  Stop motor - turn off all phases
+  * @retval None
+  */
+void Motor_Stop(void)
+{
+  HAL_GPIO_WritePin(MOTOR_A_HIGH_GPIO_Port, MOTOR_A_HIGH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_A_LOW_GPIO_Port, MOTOR_A_LOW_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_B_HIGH_GPIO_Port, MOTOR_B_HIGH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_B_LOW_GPIO_Port, MOTOR_B_LOW_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_C_HIGH_GPIO_Port, MOTOR_C_HIGH_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MOTOR_C_LOW_GPIO_Port, MOTOR_C_LOW_Pin, GPIO_PIN_RESET);
+}
 
 /* USER CODE END 4 */
 
