@@ -1,0 +1,4 @@
+../Core/Src/motor_current.c:17:6:MotorCurrent_Init	8	static
+../Core/Src/motor_current.c:29:6:MotorCurrent_CalibrateOffsets	48	static,ignoring_inline_asm
+../Core/Src/motor_current.c:54:6:MotorCurrent_GetRaw	40	static,ignoring_inline_asm
+../Core/Src/motor_current.c:66:6:MotorCurrent_GetAmps	56	static

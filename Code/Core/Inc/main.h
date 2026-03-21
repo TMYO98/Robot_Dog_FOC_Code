@@ -49,8 +49,6 @@ extern "C" {
 
 /* USER CODE END EM */
 
-void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
-
 /* Exported functions prototypes ---------------------------------------------*/
 void Error_Handler(void);
 
@@ -59,8 +57,32 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define A_CURRENT_Pin GPIO_PIN_0
+#define A_CURRENT_GPIO_Port GPIOA
+#define B_CURRENT_Pin GPIO_PIN_1
+#define B_CURRENT_GPIO_Port GPIOA
+#define C_CURRENT_Pin GPIO_PIN_2
+#define C_CURRENT_GPIO_Port GPIOA
+#define B_H_Pin GPIO_PIN_6
+#define B_H_GPIO_Port GPIOA
+#define B_L_Pin GPIO_PIN_7
+#define B_L_GPIO_Port GPIOA
+#define CAN_STB_Pin GPIO_PIN_2
+#define CAN_STB_GPIO_Port GPIOB
+#define C_L_Pin GPIO_PIN_8
+#define C_L_GPIO_Port GPIOA
+#define C_H_Pin GPIO_PIN_9
+#define C_H_GPIO_Port GPIOA
+#define A_H_Pin GPIO_PIN_15
+#define A_H_GPIO_Port GPIOA
+#define A_L_Pin GPIO_PIN_3
+#define A_L_GPIO_Port GPIOB
 #define DE_RE_Pin GPIO_PIN_7
 #define DE_RE_GPIO_Port GPIOB
+#define CS1_Pin GPIO_PIN_11
+#define CS1_GPIO_Port GPIOF
+#define CS2_Pin GPIO_PIN_8
+#define CS2_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 // Motor control pins

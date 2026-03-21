@@ -1,0 +1,16 @@
+../Core/Src/foc_transform.c:22:6:Foc_Init	8	static
+../Core/Src/foc_transform.c:32:6:FocOpenLoop_SetVdq	16	static
+../Core/Src/foc_transform.c:38:6:FocVirtualAngle_SetOmegaElectrical	16	static
+../Core/Src/foc_transform.c:43:6:FocVirtualAngle_SetThetaRad	16	static
+../Core/Src/foc_transform.c:58:6:FocVirtualAngle_Step	16	static
+../Core/Src/foc_transform.c:73:7:FocVirtualAngle_GetThetaRad	8	static
+../Core/Src/foc_transform.c:78:6:FocVirtualAngle_GetSinCos	16	static
+../Core/Src/foc_transform.c:84:6:FocClarke	24	static
+../Core/Src/foc_transform.c:91:6:FocPark	40	static
+../Core/Src/foc_transform.c:99:6:FocInversePark	40	static
+../Core/Src/foc_transform.c:107:6:FocInverseClarke	40	static
+../Core/Src/foc_transform.c:116:6:FocAbcToDq	48	static
+../Core/Src/foc_transform.c:123:6:FocDqToAbc	48	static
+../Core/Src/foc_transform.c:130:6:FocDqToAbcVirtual	40	static
+../Core/Src/foc_transform.c:135:6:Foc_OnTim1Update	40	static
+../Core/Src/foc_transform.c:144:6:HAL_TIM_PeriodElapsedCallback	16	static
