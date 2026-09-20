@@ -1,4 +1,0 @@
-../Core/Src/motor_current.c:17:6:MotorCurrent_Init	3
-../Core/Src/motor_current.c:29:6:MotorCurrent_CalibrateOffsets	3
-../Core/Src/motor_current.c:54:6:MotorCurrent_GetRaw	1
-../Core/Src/motor_current.c:66:6:MotorCurrent_GetAmps	1

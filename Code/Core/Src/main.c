@@ -18,19 +18,18 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "adc.h"
-#include "can.h"
 #include "dma.h"
 #include "iwdg.h"
 #include "spi.h"
 #include "tim.h"
-#include "usart.h"
 #include "gpio.h"
-#include "foc_transform.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "AS5147P.h"
+#include "foc_control.h"
+#include "foc_transform.h"
+#include "motor_current.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,13 +39,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/** Open-loop startup: align rotor (Vd only, omega=0), then low fe + ramp (buzz/no spin = fe too high or no align). */
-#define FOC_ALIGN_VD_PU        0.18f
-#define FOC_ALIGN_HOLD_MS      400U
-#define FOC_RUN_VQ_PU          0.38f
-#define FOC_ELEC_HZ_START      0.2f
-#define FOC_ELEC_HZ_TARGET     4.0f
-#define FOC_ELEC_HZ_RAMP_PER_S 0.5f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,7 +49,16 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+AS5147P_Handle_t AS5147P_handle_1;
+volatile uint16_t g_as5147p_angle14;
+volatile uint16_t g_as5147p_last_raw;
+volatile uint8_t g_as5147p_read_ok;
+volatile uint8_t g_as5147p_err_prev; /* last frame's EF (previous-command error) */
+volatile HAL_StatusTypeDef g_as5147p_hal_st;
+float theta_mech_rad = 0;
+volatile double g_mah_phase_a;
+volatile double g_mah_phase_b;
+volatile double g_mah_phase_c;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -95,37 +96,36 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+//#ifdef DEBUG
+//  /* Let IWDG stop counting while the CPU is halted so breakpoints / step do not reset the chip. */
+//  __HAL_RCC_DBGMCU_CLK_ENABLE();
+//  __HAL_DBGMCU_FREEZE_IWDG();
+//#endif
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_ADC_Init();
-  MX_CAN_Init();
   MX_SPI1_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
-  MX_USART1_UART_Init();
   MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
-  Foc_Init();
-  FocVirtualAngle_SetThetaRad(0.0f);
-  FocVirtualAngle_SetOmegaElectrical(0.0f);
-  /* Hold fixed field: pulls rotor to electrical 0 before spinning (reduces buzz / no-pull-in). */
-  FocOpenLoop_SetVdq(FOC_ALIGN_VD_PU, 0.0f);
-  Motor_PWM_SyncStart();
-  for (uint32_t i = 0; i < FOC_ALIGN_HOLD_MS; i++)
-  {
-    HAL_IWDG_Refresh(&hiwdg);
-    HAL_Delay(1);
-  }
-  FocOpenLoop_SetVdq(0.0f, FOC_RUN_VQ_PU);
-  {
-    float hz = FOC_ELEC_HZ_START;
-    FocVirtualAngle_SetOmegaElectrical(hz * 2.0f * (float)M_PI);
-  }
+  AS5147P_Init(&AS5147P_handle_1, &hspi1, AS5147P_CS_GPIO_Port, AS5147P_CS_Pin);
+
+//  Foc_Init();
+//  FocVirtualAngle_SetThetaRad(0.0f);
+//  FocControl_Init();
+//  FocControl_SetElectricalSpeedRadS(6.2831853f * 2.0f); /* 2 Hz electrical; tune */
+//  FocControl_SetIdqRef(0.0f, 0.10f);                    /* small torque (A); tune */
+//
+//  MotorCurrent_Init();
+//  MotorCurrent_CalibrateOffsets(128);
+//  MotorCurrent_ResetMahPerPhase();
+//
+//  Motor_PWM_SyncStart();
+//  FocControl_SetEnable(1u);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -133,23 +133,23 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    HAL_IWDG_Refresh(&hiwdg);
-    {
-      static float s_hz_e = FOC_ELEC_HZ_START;
-      if (s_hz_e < FOC_ELEC_HZ_TARGET)
-      {
-        s_hz_e += FOC_ELEC_HZ_RAMP_PER_S * 0.01f;
-        if (s_hz_e > FOC_ELEC_HZ_TARGET)
-        {
-          s_hz_e = FOC_ELEC_HZ_TARGET;
-        }
-        FocVirtualAngle_SetOmegaElectrical(s_hz_e * 2.0f * (float)M_PI);
-      }
-    }
-    HAL_Delay(10);
+
     /* USER CODE BEGIN 3 */
-  }
+    uint16_t raw = 0u;
+    g_as5147p_hal_st = AS5147P_ReadAngleDAEC(&AS5147P_handle_1, &raw);
+    g_as5147p_last_raw = raw;
+
+    if (g_as5147p_hal_st == HAL_OK && AS5147P_DataParityOk(raw) != 0u)
+    {
+      g_as5147p_angle14 = AS5147P_DataBits(raw);
+      theta_mech_rad = (float)g_as5147p_angle14 * (2.0f * 3.14159265f / 16384.0f);
+    }
+
+    /* Still kick the dog while running; in DEBUG builds DBGMCU freeze covers halted time. */
+//    HAL_IWDG_Refresh(&hiwdg);
+//    HAL_Delay(1);
   /* USER CODE END 3 */
+}
 }
 
 /**
@@ -160,17 +160,13 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSI14
-                              |RCC_OSCILLATORTYPE_LSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSI14State = RCC_HSI14_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.HSI14CalibrationValue = 16;
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
@@ -193,20 +189,9 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART1;
-  PeriphClkInit.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK1;
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
-  {
-    Error_Handler();
-  }
 }
 
 /* USER CODE BEGIN 4 */
-
-//void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-//{
-//	__NOP();
-//}
 
 
 /* USER CODE END 4 */

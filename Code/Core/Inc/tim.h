@@ -46,8 +46,6 @@ void MX_TIM1_Init(void);
 void MX_TIM2_Init(void);
 void MX_TIM3_Init(void);
 
-void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
-
 /* USER CODE BEGIN Prototypes */
 void Motor_PWM_SyncStart(void);
 /** va,vb,vc: per-unit vs half DC bus (zero-sum); |v|<=1 linear. Center duty 0.5 at 0 V. */

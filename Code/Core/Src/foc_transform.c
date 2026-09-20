@@ -29,57 +29,6 @@ void Foc_Init(void)
   s_vq_open = 0.0f;
 }
 
-void FocOpenLoop_SetVdq(float vd, float vq)
-{
-  s_vd_open = vd;
-  s_vq_open = vq;
-}
-
-void FocVirtualAngle_SetOmegaElectrical(float omega_e_rad_s)
-{
-  s_omega_e_rad_s = omega_e_rad_s;
-}
-
-void FocVirtualAngle_SetThetaRad(float theta_rad)
-{
-  s_theta_rad = theta_rad;
-  while (s_theta_rad >= (float)(2.0 * M_PI))
-  {
-    s_theta_rad -= (float)(2.0 * M_PI);
-  }
-  while (s_theta_rad < 0.0f)
-  {
-    s_theta_rad += (float)(2.0 * M_PI);
-  }
-  s_sin_theta = sinf(s_theta_rad);
-  s_cos_theta = cosf(s_theta_rad);
-}
-
-void FocVirtualAngle_Step(float dt_s)
-{
-  s_theta_rad += s_omega_e_rad_s * dt_s;
-  while (s_theta_rad >= (float)(2.0 * M_PI))
-  {
-    s_theta_rad -= (float)(2.0 * M_PI);
-  }
-  while (s_theta_rad < 0.0f)
-  {
-    s_theta_rad += (float)(2.0 * M_PI);
-  }
-  s_sin_theta = sinf(s_theta_rad);
-  s_cos_theta = cosf(s_theta_rad);
-}
-
-float FocVirtualAngle_GetThetaRad(void)
-{
-  return s_theta_rad;
-}
-
-void FocVirtualAngle_GetSinCos(float *sin_theta, float *cos_theta)
-{
-  *sin_theta = s_sin_theta;
-  *cos_theta = s_cos_theta;
-}
 
 void FocClarke(float ia, float ib, float ic, float *ialpha, float *ibeta)
 {
@@ -132,19 +81,64 @@ void FocDqToAbcVirtual(float vd, float vq, float *va, float *vb, float *vc)
   FocDqToAbc(vd, vq, s_theta_rad, va, vb, vc);
 }
 
-void Foc_OnTim1Update(void)
+static void foc_wrap_theta_rad(float *theta)
 {
-  float va, vb, vc;
-
-  FocVirtualAngle_Step(FOC_ANGLE_DT_S);
-  FocDqToAbcVirtual(s_vd_open, s_vq_open, &va, &vb, &vc);
-  Motor_PWM_SetPhaseVoltagePU(va, vb, vc);
+  const float two_pi = (float)(2.0 * M_PI);
+  while (*theta >= two_pi)
+  {
+    *theta -= two_pi;
+  }
+  while (*theta < 0.0f)
+  {
+    *theta += two_pi;
+  }
 }
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+void FocVirtualAngle_SetOmegaElectrical(float omega_e_rad_s)
 {
-  if (htim->Instance == TIM1)
+  s_omega_e_rad_s = omega_e_rad_s;
+}
+
+void FocVirtualAngle_SetThetaRad(float theta_rad)
+{
+  s_theta_rad = theta_rad;
+  foc_wrap_theta_rad(&s_theta_rad);
+  s_sin_theta = sinf(s_theta_rad);
+  s_cos_theta = cosf(s_theta_rad);
+}
+
+void FocOpenLoop_SetVdq(float vd, float vq)
+{
+  s_vd_open = vd;
+  s_vq_open = vq;
+}
+
+void FocVirtualAngle_Step(float dt_s)
+{
+  s_theta_rad += s_omega_e_rad_s * dt_s;
+  foc_wrap_theta_rad(&s_theta_rad);
+  s_sin_theta = sinf(s_theta_rad);
+  s_cos_theta = cosf(s_theta_rad);
+}
+
+float FocVirtualAngle_GetThetaRad(void)
+{
+  return s_theta_rad;
+}
+
+void FocVirtualAngle_GetSinCos(float *sin_theta, float *cos_theta)
+{
+  if (sin_theta != NULL)
   {
-    Foc_OnTim1Update();
+    *sin_theta = s_sin_theta;
   }
+  if (cos_theta != NULL)
+  {
+    *cos_theta = s_cos_theta;
+  }
+}
+
+void Foc_OnTim1Update(void)
+{
+  FocVirtualAngle_Step(FOC_ANGLE_DT_S);
 }

@@ -1,0 +1,11 @@
+../Core/Src/AS5147P.c:16:17:as5147p_cmd_with_parc	3
+../Core/Src/AS5147P.c:27:17:as5147p_read_command	1
+../Core/Src/AS5147P.c:33:26:as5147p_xfer_16	3
+../Core/Src/AS5147P.c:47:6:AS5147P_Init	1
+../Core/Src/AS5147P.c:63:19:AS5147P_ReadRegister	3
+../Core/Src/AS5147P.c:83:19:AS5147P_ReadAngleUncorrected	1
+../Core/Src/AS5147P.c:88:19:AS5147P_ReadAngleDAEC	1
+../Core/Src/AS5147P.c:93:9:AS5147P_DataParityOk	2
+../Core/Src/AS5147P.c:103:9:AS5147P_ErrorFlag	1
+../Core/Src/AS5147P.c:108:10:AS5147P_DataBits	1
+../Core/Src/AS5147P.c:113:19:AS5147P_Test_ReadPosition	2

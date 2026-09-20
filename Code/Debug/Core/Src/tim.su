@@ -1,10 +1,7 @@
-../Core/Src/tim.c:26:14:motor_pwm_clamp_duty	16	static
-../Core/Src/tim.c:39:13:motor_pwm_set_one_phase	40	static
-../Core/Src/tim.c:61:6:MX_TIM1_Init	96	static
-../Core/Src/tim.c:137:6:MX_TIM2_Init	72	static
-../Core/Src/tim.c:200:6:MX_TIM3_Init	72	static
-../Core/Src/tim.c:262:6:HAL_TIM_Base_MspInit	32	static
-../Core/Src/tim.c:312:6:HAL_TIM_MspPostInit	64	static
-../Core/Src/tim.c:392:6:HAL_TIM_Base_MspDeInit	16	static
-../Core/Src/tim.c:441:6:Motor_PWM_SetPhaseVoltagePU	24	static
-../Core/Src/tim.c:453:6:Motor_PWM_SyncStart	8	static
+../Core/Src/tim.c:60:6:MX_TIM1_Init	32	static
+../Core/Src/tim.c:101:6:MX_TIM2_Init	64	static
+../Core/Src/tim.c:148:6:MX_TIM3_Init	64	static
+../Core/Src/tim.c:195:6:HAL_TIM_Base_MspInit	24	static
+../Core/Src/tim.c:246:6:HAL_TIM_Base_MspDeInit	8	static
+../Core/Src/tim.c:295:6:Motor_PWM_SetPhaseVoltagePU	32	static
+../Core/Src/tim.c:307:6:Motor_PWM_SyncStart	8	static
