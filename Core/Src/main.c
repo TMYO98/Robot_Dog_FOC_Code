@@ -18,12 +18,17 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "adc.h"
+#include "can.h"
+#include "dma.h"
 #include "spi.h"
+#include "tim.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "AS5147P.h"
+#include "foc_control.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -89,9 +94,19 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_SPI1_Init();
+  MX_ADC_Init();
+  MX_TIM1_Init();
+  MX_CAN_Init();
   /* USER CODE BEGIN 2 */
   AS5147P_Init(&AS5147P_handle_1, &hspi1, CS1_GPIO_Port, CS1_Pin);
+  FOC_Control_Init();
+  /* Stays disabled (PWM at neutral) until commanded, e.g.:
+   *   FOC_Control_SetElectricalSpeedRadS(2.0f * (float)M_PI * 3.0f);
+   *   FOC_Control_SetIdqRef(0.0f, 0.5f);
+   *   FOC_Control_SetEnable(1);
+   */
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -124,8 +139,10 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI14|RCC_OSCILLATORTYPE_HSI48;
   RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
+  RCC_OscInitStruct.HSI14State = RCC_HSI14_ON;
+  RCC_OscInitStruct.HSI14CalibrationValue = 16;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
