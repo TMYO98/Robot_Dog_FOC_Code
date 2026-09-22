@@ -13,3 +13,10 @@ so the formula ends up being (ARR+1) = 48M/20k -> ARR+1 = 2400 -> ARR = 2399
 
 Then by solving for the ARR value, we’ll get 2399. However, as mentioned earlier in the center-aligned Mode 3, we should use only half the calculated value for ARR or CCR registers to control the PWM signal’s frequency and duty cycle properly. Therefore, we’ll write 1200 in the ARR register to achieve a 20kHz PWM.
 
+Setting the PWM on the same tim, adding dead time (10 is ok??  10/48MHz = 208, need to check the mosfets datashseet).
+PWM timer has an interruption
+PWM is center aligned
+
+ADC gets trigger from timer after falling edge.
+DMA half word
+
