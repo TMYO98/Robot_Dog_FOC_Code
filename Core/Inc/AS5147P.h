@@ -16,9 +16,9 @@
 
 #include "spi.h"
 
-/** SPI CS for the encoder: set to CS1 (PF11) or CS2 (PB8) to match the PCB. */
-#define AS5147P_CS_GPIO_Port (CS1_GPIO_Port)
-#define AS5147P_CS_Pin       (CS1_Pin)
+/* The encoder CS is CS1 (PA4); CS2 (PB8) is a spare. The fast loop
+ * (foc_fast.c) talks to the encoder with direct SPI1 register access; the
+ * HAL-based functions below are only used during init. */
 
 /** Volatile register addresses (bits 13:0 of SPI command). */
 #define AS5147P_REG_NOP       0x0000u
@@ -28,6 +28,12 @@
 #define AS5147P_REG_MAGN      0x3FFDu
 #define AS5147P_REG_ANGLEUNC  0x3FFEu
 #define AS5147P_REG_ANGLECOM  0x3FFFu
+
+/** DIAAGC bits */
+#define AS5147P_DIAAGC_LF     (1u << 8)   /* offset compensation finished */
+#define AS5147P_DIAAGC_COF    (1u << 9)   /* CORDIC overflow */
+#define AS5147P_DIAAGC_MAGH   (1u << 10)  /* magnetic field too strong */
+#define AS5147P_DIAAGC_MAGL   (1u << 11)  /* magnetic field too weak */
 
 typedef struct
 {
