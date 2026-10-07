@@ -22,6 +22,8 @@
 #include "stm32f0xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "foc_control.h"
+#include "foc_fast.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -87,7 +89,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  FocFast_EmergencyOff();
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -115,7 +117,8 @@ void SVC_Handler(void)
 void PendSV_Handler(void)
 {
   /* USER CODE BEGIN PendSV_IRQn 0 */
-
+  /* Slow control loop, pended by the fast loop every FOC_SLOW_DIV steps. */
+  FocControl_SlowStep();
   /* USER CODE END PendSV_IRQn 0 */
   /* USER CODE BEGIN PendSV_IRQn 1 */
 
@@ -149,7 +152,11 @@ void SysTick_Handler(void)
 void DMA1_Channel1_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA1_Channel1_IRQn 0 */
-
+  /* ADC scan complete: run the fast loop without the HAL dispatch overhead. */
+  if (FocFast_DmaIrqHandler())
+  {
+    return;
+  }
   /* USER CODE END DMA1_Channel1_IRQn 0 */
   HAL_DMA_IRQHandler(&hdma_adc);
   /* USER CODE BEGIN DMA1_Channel1_IRQn 1 */
