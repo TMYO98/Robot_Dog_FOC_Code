@@ -1,16 +1,20 @@
 /*
  * foc_control.h
  *
- * Closed-loop dq current-vector FOC: measured phase currents -> Clarke + Park
- * -> PI on id/iq -> inverse Park + inverse Clarke -> PWM duty on TIM1 CH1..3.
+ * Slow loop (FOC_SLOW_HZ, PendSV, lowest interrupt priority) on top of the
+ * fast current loop in foc_fast.c:
  *
- * The electrical angle is a virtual open-loop ramp (FOC_Control_SetElectricalSpeedRadS),
- * used for both the measurement Park and the output inverse Park so the current
- * regulators always work in the same rotating frame they were measured in.
+ *   - state machine: INIT -> IDLE <-> MOTOR / CALIBRATING, any -> FAULT
+ *   - position / velocity (output side, through FOC_GEAR_RATIO)
+ *   - impedance control  tau = kp*(p_des - p) + kd*(v_des - v) + tau_ff
+ *     -> iq reference for the fast loop
+ *   - encoder calibration (current sign, phase resistance, direction,
+ *     pole pairs, electrical offset), stored in flash
+ *   - Vbus limits, command timeout, watchdog refresh
  *
- * Call FOC_Control_Step() once per TIM1 update event (matching FOC_CONTROL_LOOP_HZ).
+ * The request / command functions are meant to be called from the main loop
+ * (CAN handling); they only set flags that the slow loop acts on.
  *
- * Created on: Sep 21, 2026
  *      Author: CT
  */
 
@@ -23,43 +27,69 @@
 extern "C" {
 #endif
 
-/** Call rate of FOC_Control_Step() in Hz (must match how it's wired to the TIM1 update ISR). */
-#ifndef FOC_CONTROL_LOOP_HZ
-#define FOC_CONTROL_LOOP_HZ (20000.0f)
-#endif
+typedef enum
+{
+  FOC_STATE_INIT = 0,      /* measuring current offsets, waiting for the encoder */
+  FOC_STATE_IDLE,          /* bridge off */
+  FOC_STATE_MOTOR,         /* impedance control from CAN commands */
+  FOC_STATE_CALIBRATING,
+  FOC_STATE_FAULT          /* bridge off until faults are cleared */
+} FocState_t;
 
-/** DC bus voltage (V); sets the 0..1 duty mapping for the phase voltages. */
-#ifndef FOC_VBUS_V
-#define FOC_VBUS_V (12.0f)
-#endif
+typedef enum
+{
+  FOC_CAL_ERR_NONE = 0,
+  FOC_CAL_ERR_NO_CURRENT,     /* voltage ramp produced no current: motor / sensing disconnected */
+  FOC_CAL_ERR_CURRENT_SIGN,   /* measured current has the wrong sign: flip FOC_CURRENT_SIGN */
+  FOC_CAL_ERR_RESISTANCE,     /* measured resistance out of range */
+  FOC_CAL_ERR_NO_MOTION,      /* rotor did not follow the field */
+  FOC_CAL_ERR_POLE_PAIRS,     /* motion not consistent with an integer pole-pair count */
+  FOC_CAL_ERR_FLASH
+} FocCalError_t;
 
-/** Id/Iq PI gains (V per A). Tune for your motor. */
-#ifndef FOC_ID_KP
-#define FOC_ID_KP (1.0f)
-#endif
-#ifndef FOC_ID_KI
-#define FOC_ID_KI (100.0f)
-#endif
-#ifndef FOC_IQ_KP
-#define FOC_IQ_KP (1.0f)
-#endif
-#ifndef FOC_IQ_KI
-#define FOC_IQ_KI (100.0f)
-#endif
+typedef struct
+{
+  float p_des;    /* rad (output) */
+  float v_des;    /* rad/s */
+  float kp;       /* Nm/rad */
+  float kd;       /* Nm*s/rad */
+  float t_ff;     /* Nm */
+} FocCommand_t;
 
-void FOC_Control_Init(void);
+typedef struct
+{
+  float p;        /* rad (output) */
+  float v;        /* rad/s */
+  float t;        /* Nm, from measured iq */
+  uint8_t state;  /* FocState_t */
+  uint8_t calibrated;
+  uint8_t faults; /* FOC_FAULT_* */
+  uint8_t cal_error;
+} FocFeedback_t;
 
-/** Electrical speed for the open-loop angle (rad/s); e.g. 2*pi*3 for 3 Hz electrical. */
-void FOC_Control_SetElectricalSpeedRadS(float omega_e_rad_s);
+/** Loads the flash config, checks the encoder and starts the fast loop. Call after MX_*_Init(). */
+void FocControl_Init(void);
 
-/** dq current references (A). id=0, iq!=0 is a typical torque command. */
-void FOC_Control_SetIdqRef(float id_ref_a, float iq_ref_a);
+/** Slow loop body, called from PendSV_Handler. */
+void FocControl_SlowStep(void);
 
-/** When zero, PWM is forced to neutral (50% all phases, no torque) and PI state is reset. */
-void FOC_Control_SetEnable(uint8_t enable);
+/** Main-loop housekeeping (flash writes). */
+void FocControl_Background(void);
 
-/** Runs one control update: measure -> regulate -> drive PWM. Call from the TIM1 update ISR. */
-void FOC_Control_Step(void);
+void FocControl_RequestMotorMode(void);
+void FocControl_RequestIdle(void);
+void FocControl_RequestZero(void);         /* idle only: current position becomes 0, saved */
+void FocControl_RequestCalibration(void);  /* idle only: motor must be free to turn */
+void FocControl_RequestClearFaults(void);
+
+/** New impedance setpoint; also feeds the command timeout. */
+void FocControl_SetCommand(const FocCommand_t *cmd);
+
+void FocControl_GetFeedback(FocFeedback_t *fb);
+
+uint8_t FocControl_GetCanId(void);
+/** Changes and saves the CAN id (idle only). Returns 1 if accepted. */
+uint8_t FocControl_SetCanId(uint8_t id);
 
 #ifdef __cplusplus
 }
