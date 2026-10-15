@@ -28,7 +28,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "AS5147P.h"
+#include "can_protocol.h"
 #include "foc_control.h"
+#include "foc_fast.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,9 +52,8 @@
 
 /* USER CODE BEGIN PV */
 AS5147P_Handle_t AS5147P_handle_1;
-volatile uint16_t g_as5147p_last_raw;
-/** Watch this in a Live Expression / debugger to see decoded angle, parity, and error flag. */
-volatile AS5147P_Position_t g_as5147p_position;
+/* For debugging, watch g_foc_fast (foc_fast.h) in Live Expressions: currents,
+ * encoder angle/position, faults and loop timing are all there. */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -100,13 +101,10 @@ int main(void)
   MX_TIM1_Init();
   MX_CAN_Init();
   /* USER CODE BEGIN 2 */
-  AS5147P_Init(&AS5147P_handle_1, &hspi1, CS1_GPIO_Port, CS1_Pin);
-  FOC_Control_Init();
-  /* Stays disabled (PWM at neutral) until commanded, e.g.:
-   *   FOC_Control_SetElectricalSpeedRadS(2.0f * (float)M_PI * 3.0f);
-   *   FOC_Control_SetIdqRef(0.0f, 0.5f);
-   *   FOC_Control_SetEnable(1);
-   */
+  /* Starts the 20 kHz fast loop and 2 kHz slow loop (both interrupt driven).
+   * The bridge stays off until a CAN "enter motor mode" command. */
+  FocControl_Init();
+  CanProto_Init(FocControl_GetCanId());
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -116,12 +114,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	AS5147P_Position_t pos;
-	AS5147P_Test_ReadPosition(&AS5147P_handle_1, &pos);
-	g_as5147p_position = pos;
-	g_as5147p_last_raw = pos.angle14;
-	HAL_Delay(2);
-
+    CanProto_Poll();
+    FocControl_Background();
 
   }
   /* USER CODE END 3 */
@@ -175,6 +169,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  FocFast_EmergencyOff();   /* gates to idle first: never leave the bridge switching */
   __disable_irq();
   while (1)
   {
