@@ -27,6 +27,12 @@ extern "C" {
 /** sin(2*pi*i/256) in Q15, i = 0..256 (last entry repeats the first). */
 extern const int16_t k_foc_sin_q15[257];
 
+/**
+ * sin(angle) in Q15, where the angle is 0..65535 for 0..2*pi.
+ * The top 8 bits pick a table entry, the low 8 bits interpolate linearly to the
+ * next one: s0 + (s1 - s0) * frac / 256. Maximum error is about 0.01 % of full
+ * scale, much finer than the ADC.
+ */
 static inline int32_t foc_sin_q15(uint16_t angle)
 {
   const uint32_t i = (uint32_t)angle >> 8;
@@ -36,18 +42,24 @@ static inline int32_t foc_sin_q15(uint16_t angle)
   return s0 + (((s1 - s0) * frac) >> 8);
 }
 
+/** sin and cos together, using cos(a) = sin(a + 90 deg) (a quarter turn = 16384). */
 static inline void foc_sincos_q15(uint16_t angle, int32_t *s, int32_t *c)
 {
   *s = foc_sin_q15(angle);
   *c = foc_sin_q15((uint16_t)(angle + FOC_ANGLE_QUARTER));
 }
 
+/** Limits x to the range [lo, hi]. */
 static inline int32_t foc_clamp_i32(int32_t x, int32_t lo, int32_t hi)
 {
   return (x < lo) ? lo : ((x > hi) ? hi : x);
 }
 
-/** 1 if the 16-bit word has an even number of set bits. */
+/**
+ * 1 if the 16-bit word has an even number of set bits (AS5147P frames use even
+ * parity). Each XOR-fold halves the width: after folding 16 -> 8 -> 4 -> 2 -> 1,
+ * bit 0 holds the XOR of all 16 bits, which is 1 for an odd count.
+ */
 static inline uint32_t foc_parity_even16(uint32_t x)
 {
   x ^= x >> 8;

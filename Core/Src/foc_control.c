@@ -84,6 +84,8 @@ static uint32_t s_cal_off_n;
 
 /* ------------------------------------------------------------------------- */
 
+/** Masks interrupts and returns the previous PRIMASK (see irq_restore). Used by the
+ *  main-loop API so the slow loop never sees a half-written command or config. */
 static inline uint32_t irq_save(void)
 {
   uint32_t primask = __get_PRIMASK();
@@ -91,11 +93,17 @@ static inline uint32_t irq_save(void)
   return primask;
 }
 
+/** Restores the PRIMASK saved by irq_save(). */
 static inline void irq_restore(uint32_t primask)
 {
   __set_PRIMASK(primask);
 }
 
+/**
+ * Converts a gain that is already scaled to Q12 (float) into the integer the fast
+ * loop uses: rounded, and clamped to 0..2^18 so err * gain can't overflow int32
+ * there (the fast loop clamps the error to +/-4096 counts).
+ */
 static int32_t gain_to_q12(float g)
 {
   if (g < 0.0f)
@@ -109,7 +117,19 @@ static int32_t gain_to_q12(float g)
   return (int32_t)(g + 0.5f);
 }
 
-/** Current PI gains from the motor model: Kp = L*wbw, Ki = R*wbw (pole-zero cancellation). */
+/**
+ * Computes the current-loop PI gains from the motor model and hands them to the
+ * fast loop.
+ *
+ * The motor winding is an R-L circuit, so its pole is at R/L. Choosing
+ * Kp = L * wbw and Ki = R * wbw puts the PI zero (Ki/Kp = R/L) on top of that
+ * pole. The two cancel, and the closed loop becomes first order with bandwidth
+ * wbw = 2*pi*FOC_CURRENT_BW_HZ.
+ *
+ * Units: Kp in V/A -> mV per ADC count -> Q12. Ki is per fast-loop sample,
+ * so it is also divided by FOC_FAST_HZ.
+ * Called at init and whenever calibration measures a new resistance.
+ */
 static void update_gains(void)
 {
   const float w = TWO_PI_F * FOC_CURRENT_BW_HZ;
@@ -118,6 +138,12 @@ static void update_gains(void)
   g_foc_fast.ki_q12 = gain_to_q12(s_cfg.r_ohm * w / (float)FOC_FAST_HZ * v_per_a_to_q12);
 }
 
+/**
+ * Copies the stored calibration (encoder offset, direction, pole pairs) and the
+ * overcurrent threshold into g_foc_fast, then recomputes the PI gains.
+ * Only called while the bridge is off, so the fast loop never sees a mix of
+ * old and new values while regulating.
+ */
 static void push_params(void)
 {
   g_foc_fast.enc_offset = s_cfg.enc_offset;
@@ -127,6 +153,22 @@ static void push_params(void)
   update_gains();
 }
 
+/**
+ * Updates the bus-voltage-dependent fast-loop parameters, every slow step.
+ *
+ * With FOC_VBUS_SENSE_ENABLE: converts the raw ADC value through the divider,
+ * low-pass filters it (50 Hz), and trips UNDER/OVERVOLTAGE outside
+ * FOC_VBUS_MIN_V..MAX_V (not during INIT, while the filter settles).
+ * Without it, FOC_VBUS_NOMINAL_V is assumed.
+ *
+ * Then it derives:
+ *   vmax_mv        largest |Vdq| the current loop may ask for: the linear SVPWM
+ *                  limit Vbus/sqrt(3), times FOC_MAX_MODULATION for margin.
+ *   duty_scale_q16 ARR * 65536 / Vbus_mV, so the fast loop converts mV to
+ *                  compare counts with one multiply and shift. Because it
+ *                  tracks the measured Vbus, a sagging battery doesn't change
+ *                  the voltage actually applied (bus voltage compensation).
+ */
 static void update_vbus(void)
 {
 #if FOC_VBUS_SENSE_ENABLE
@@ -156,6 +198,24 @@ static void update_vbus(void)
   g_foc_fast.duty_scale_q16 = (int32_t)(((uint32_t)FOC_TIM_ARR << 16) / vbus_mv);
 }
 
+/**
+ * Position, velocity and torque feedback, every slow step.
+ *
+ *  - Velocity: change in the multi-turn encoder count since the last slow step,
+ *    times FOC_SLOW_HZ, through a first-order low-pass (FOC_VEL_FILTER_HZ).
+ *    At 2 kHz one count of change is ~0.77 rad/s, so the filter is what makes
+ *    the velocity usable for the kd term.
+ *  - iq is filtered the same way for the torque reported on CAN.
+ *  - Output position = (direction * raw count - zero) in radians / gear ratio.
+ *    Multiplying by the calibrated direction makes positive torque produce
+ *    positive position, whatever way the encoder is mounted.
+ *  - Angle advance for the fast loop: electrical speed (angle units per fast
+ *    sample) times the delay in samples. theta_adv_meas makes up for the
+ *    encoder frame being one period old (used for the Park transform).
+ *    theta_adv_out also covers the time until the new PWM is applied (used for
+ *    the inverse Park). Without this the field lags the rotor at speed and
+ *    torque per amp drops.
+ */
 static void update_kinematics(void)
 {
   const int32_t pos_raw = g_foc_fast.pos_raw;
@@ -176,7 +236,15 @@ static void update_kinematics(void)
   g_foc_fast.theta_adv_out = (int32_t)(w_e * (FOC_ENC_DELAY_SAMPLES + FOC_PWM_DELAY_SAMPLES));
 }
 
-/** Picks the multiple of one motor turn that puts the output closest to the stored zero. */
+/**
+ * Picks the whole number of motor turns that puts the output closest to zero.
+ *
+ * The encoder is absolute over one motor turn only. At boot pos_raw starts at
+ * that single-turn angle, and the stored zero is also single-turn. This shifts
+ * s_zero by whole turns (16384 counts) until the reported position is in
+ * [-half turn, +half turn). So after power-up the joint reads correctly as
+ * long as it is within half a motor turn of its zero.
+ */
 static void align_zero(void)
 {
   int32_t mp = (int32_t)s_cfg.enc_dir * g_foc_fast.pos_raw - s_zero;
@@ -192,6 +260,7 @@ static void align_zero(void)
   }
 }
 
+/** Bridge off, encoder angle back in use, current references zeroed, state IDLE. */
 static void enter_idle(void)
 {
   FocFast_SetMode(FOC_FAST_MODE_OFF);
@@ -206,6 +275,18 @@ static void enter_idle(void)
 /* Motor mode                                                                */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Impedance controller, every slow step in MOTOR state.
+ *
+ *  1. Command timeout: s_cmd_age counts slow ticks since the last CAN command
+ *     (FocControl_SetCommand resets it). Past FOC_CAN_TIMEOUT_MS the bridge
+ *     trips with FAULT_TIMEOUT, so a dead master can't leave the joint powered.
+ *  2. tau = kp * (p_des - p) + kd * (v_des - v) + t_ff   (output side, Nm).
+ *     kp acts as a spring, kd as a damper, t_ff as feed-forward torque. With
+ *     kp = kd = 0 it is a pure torque command.
+ *  3. Motor current iq = tau / (Kt * gear ratio), clamped to +/-FOC_I_MAX_A,
+ *     converted to ADC counts for the fast loop. id = 0 (no field weakening).
+ */
 static void motor_step(void)
 {
   if ((FOC_CAN_TIMEOUT_MS > 0u) && (++s_cmd_age > MS_TICKS(FOC_CAN_TIMEOUT_MS)))
@@ -233,6 +314,11 @@ static void motor_step(void)
 /* Calibration                                                               */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Aborts calibration: records why (reported in FocFeedback_t.cal_error), returns
+ * to the encoder angle, and trips FAULT_CALIBRATION, which turns the bridge off.
+ * Nothing is written to flash, so the previous calibration stays valid.
+ */
 static void cal_fail(uint8_t err)
 {
   s_cal_error = err;
@@ -240,6 +326,7 @@ static void cal_fail(uint8_t err)
   FocFast_Trip(FOC_FAULT_CALIBRATION);
 }
 
+/** Moves calibration to the next phase: resets its tick timer and averaging sums. */
 static void cal_next(uint8_t phase)
 {
   s_cal_phase = phase;
@@ -249,6 +336,11 @@ static void cal_next(uint8_t phase)
   s_cal_n = 0u;
 }
 
+/**
+ * Starts calibration from IDLE: the fast loop switches to an overridden
+ * electrical angle of 0 and open-loop VOLTAGE mode with 0 V, and the first
+ * phase (current sign check) begins. See cal_step() for the sequence.
+ */
 static void cal_start(void)
 {
   s_cal_error = FOC_CAL_ERR_NONE;
@@ -264,6 +356,16 @@ static void cal_start(void)
   s_state = FOC_STATE_CALIBRATING;
 }
 
+/**
+ * One sample of the electrical offset during the offset sweeps.
+ *
+ * The rotor follows the commanded field angle theta, so at every instant
+ *   offset = (encoder angle * 4 * pole pairs, in the detected direction) - theta.
+ * Angles wrap at 65536, so a plain average would break near 0/65535. Instead,
+ * each sample is stored as a signed difference from the first one (int16 wraps
+ * correctly), the differences are averaged, and the mean is added back to the
+ * first sample in cal_finish().
+ */
 static void cal_sample_offset(void)
 {
   const uint32_t m = g_foc_fast.enc_angle;
@@ -278,6 +380,12 @@ static void cal_sample_offset(void)
   s_cal_off_n++;
 }
 
+/**
+ * Calibration succeeded: turn the bridge off, store offset / direction / pole
+ * pairs / resistance in s_cfg, push them to the fast loop (new resistance ->
+ * new Ki), recompute the zero (the direction may have flipped), and ask the
+ * main loop to write flash. Back to IDLE.
+ */
 static void cal_finish(void)
 {
   const uint16_t offset = (uint16_t)(s_cal_off_ref + (int32_t)(s_cal_off_sum / (int32_t)s_cal_off_n));
@@ -304,6 +412,38 @@ static void cal_finish(void)
   s_state_ticks = 0u;
 }
 
+/**
+ * Calibration state machine, one call per slow step (0.5 ms). The motor must be
+ * free to turn. Sequence:
+ *
+ *  CAL_SIGN      Open-loop vd ramps from 0 to FOC_CAL_MAX_VOLTAGE_V over 1 s at
+ *                angle 0, so current should flow into phase A and out of B and
+ *                C. Once |ia| reaches half the calibration current, it checks
+ *                ia > 0 and ib, ic < 0. A wrong sign (or a dead channel) fails
+ *                here, before the closed current loop could run away with the
+ *                wrong feedback sign. No current by the end of the ramp means
+ *                the motor or sensing is disconnected.
+ *
+ *  CAL_ALIGN_LO  Closed-loop id ramps to I/2 at angle 0, which pulls the rotor
+ *                into alignment. Hold, then average vd and id over the last
+ *                100 ms.
+ *  CAL_ALIGN_HI  Same at full current I. R = (vd2 - vd1) / (id2 - id1). Using
+ *                the slope of two points cancels the constant voltage error
+ *                from dead time and FET drops. Rotor position is recorded.
+ *
+ *  CAL_SWEEP_FWD The field turns FOC_CAL_ELEC_REVS electrical revolutions
+ *                forward, and the rotor follows.
+ *  CAL_SETTLE_1  After 300 ms of settling: the sign of the encoder change gives
+ *                the direction, and revs * 16384 / |change| must be (close to)
+ *                a whole number, the pole-pair count.
+ *  CAL_SWEEP_BACK, CAL_SETTLE_2, CAL_SWEEP_FWD_2
+ *                Sweep back and forward again while sampling the offset
+ *                (cal_sample_offset). Friction makes the rotor lag the field
+ *                by the same angle in each direction, so averaging both
+ *                directions cancels it.
+ *
+ * Total time is about 1.5 s plus 3 x 2 s of sweeps.
+ */
 static void cal_step(void)
 {
   const int32_t i_cal = (int32_t)(FOC_CAL_CURRENT_A * FOC_COUNTS_PER_AMP);
@@ -474,6 +614,31 @@ static void cal_step(void)
 /* Slow loop                                                                 */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Slow loop body: FOC_SLOW_HZ (2 kHz), called from PendSV_Handler, which the
+ * fast loop pends every FOC_SLOW_DIV steps. PendSV has the lowest priority, so
+ * the fast loop can interrupt this function at any point, but main-loop code
+ * can't.
+ *
+ * Every call:
+ *  1. Mark busy (the fast loop counts overruns) and refresh the watchdog. If
+ *     either loop stops, the refresh stops and the MCU resets.
+ *  2. Vbus scaling/limits and position/velocity feedback.
+ *  3. Any fault latched by either loop -> FAULT state (bridge already off).
+ *  4. Clear-faults and go-idle requests, valid from several states.
+ *  5. The state machine:
+ *       INIT         wait for the current offsets and a valid encoder angle
+ *                    (1 s timeout), set up the zero, go to IDLE.
+ *       IDLE         handle zero / calibrate / motor-mode requests. Motor
+ *                    mode needs a stored calibration and starts with an
+ *                    all-zero command (no torque) until the master sends one.
+ *       MOTOR        motor_step(): impedance control.
+ *       CALIBRATING  cal_step().
+ *       FAULT        stay off until a clear-faults request.
+ *  6. Requests that didn't apply are dropped (not queued), so a stale "enter
+ *     motor mode" can't fire later by surprise.
+ *  7. Publish the feedback snapshot that CAN replies are built from.
+ */
 void FocControl_SlowStep(void)
 {
   g_foc_slow_busy = 1u;
@@ -588,6 +753,13 @@ void FocControl_SlowStep(void)
 /* Init / main-loop API                                                      */
 /* ------------------------------------------------------------------------- */
 
+/**
+ * Starts the independent watchdog (runs from the ~40 kHz LSI, independent of
+ * the main clock). Once started it can't be stopped. The slow loop reloads it
+ * every 0.5 ms, and if it isn't reloaded within ~FOC_IWDG_TIMEOUT_MS the MCU
+ * resets (and the bridge outputs go Hi-Z / off with it). It is frozen while
+ * the debugger halts the core, so breakpoints don't cause resets.
+ */
 static void iwdg_start(void)
 {
 #if FOC_IWDG_ENABLE
@@ -604,6 +776,18 @@ static void iwdg_start(void)
 #endif
 }
 
+/**
+ * Called once from main() after the MX_*_Init() functions.
+ *  1. Load the calibration / CAN id from flash (defaults if blank or corrupt)
+ *     and push it to the fast loop. Fill in the Vbus-dependent scaling.
+ *  2. Encoder bring-up through the HAL driver: flush its SPI pipeline, then
+ *     read DIAAGC. Magnet too weak/strong or CORDIC overflow -> FAULT_MAGNET.
+ *     No valid answer -> FAULT_ENCODER. The firmware keeps running so the
+ *     fault can be reported over CAN.
+ *  3. FocFast_Init(): start PWM timing, ADC sampling and the fast loop (bridge
+ *     off, current offsets being measured).
+ *  4. Start the watchdog.
+ */
 void FocControl_Init(void)
 {
   NvConfig_Load(&s_cfg);
@@ -632,6 +816,16 @@ void FocControl_Init(void)
   iwdg_start();
 }
 
+/**
+ * Main-loop housekeeping: writes the config to flash when the slow loop asked
+ * for it (after calibration, zeroing or a CAN id change).
+ *
+ * A flash page erase stalls the whole CPU (the code runs from the same flash)
+ * for up to ~40 ms, so the fast loop stops during it. That is only safe with
+ * the bridge off, hence the IDLE/FAULT + mode OFF condition. The watchdog
+ * (100 ms) tolerates the stall. The config is copied under a critical section
+ * first so the slow loop can't change it halfway through the write.
+ */
 void FocControl_Background(void)
 {
   if (s_save_pending && ((s_state == FOC_STATE_IDLE) || (s_state == FOC_STATE_FAULT))
@@ -651,12 +845,20 @@ void FocControl_Background(void)
   }
 }
 
+/* Request flags: the main loop (CAN) sets them, and the slow loop acts on them at
+ * its next step and clears them. Each is a single byte, so setting one is
+ * atomic. What each request does in each state is in FocControl_SlowStep(). */
 void FocControl_RequestMotorMode(void)    { s_req_motor = 1u; }
 void FocControl_RequestIdle(void)         { s_req_idle = 1u; }
 void FocControl_RequestZero(void)         { s_req_zero = 1u; }
 void FocControl_RequestCalibration(void)  { s_req_cal = 1u; }
 void FocControl_RequestClearFaults(void)  { s_req_clear = 1u; }
 
+/**
+ * Stores a new impedance setpoint and resets the command timeout. The struct is
+ * copied with interrupts masked, so the slow loop (which can preempt main) never
+ * sees half of an old command and half of a new one.
+ */
 void FocControl_SetCommand(const FocCommand_t *cmd)
 {
   uint32_t p = irq_save();
@@ -665,6 +867,7 @@ void FocControl_SetCommand(const FocCommand_t *cmd)
   irq_restore(p);
 }
 
+/** Copies the latest feedback snapshot (written by the slow loop) atomically. */
 void FocControl_GetFeedback(FocFeedback_t *fb)
 {
   uint32_t p = irq_save();
@@ -672,11 +875,17 @@ void FocControl_GetFeedback(FocFeedback_t *fb)
   irq_restore(p);
 }
 
+/** CAN id from the stored config (FOC_CAN_ID_DEFAULT on a blank board). */
 uint8_t FocControl_GetCanId(void)
 {
   return s_cfg.can_id;
 }
 
+/**
+ * Changes the CAN id and schedules a flash write. Only accepted in IDLE and for
+ * ids 1..127 that aren't the master's id. Returns 1 if accepted. The caller
+ * (can_protocol.c) then moves its receive filter to the new id.
+ */
 uint8_t FocControl_SetCanId(uint8_t id)
 {
   if ((s_state != FOC_STATE_IDLE) || (id == 0u) || (id == FOC_CAN_MASTER_ID) || (id > 0x7Fu))

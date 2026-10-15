@@ -18,6 +18,11 @@
 
 _Static_assert((sizeof(NvConfig_t) % 4u) == 0u, "NvConfig_t must be a whole number of words");
 
+/**
+ * 32-bit FNV-1a hash of every byte before the checksum field: h = (h ^ byte) *
+ * 16777619, starting from 2166136261. Cheap, and it catches a half-written
+ * page, erased flash (all 0xFF) or a struct layout change.
+ */
 static uint32_t nv_checksum(const NvConfig_t *cfg)
 {
   /* FNV-1a over everything except the checksum itself */
@@ -31,6 +36,10 @@ static uint32_t nv_checksum(const NvConfig_t *cfg)
   return h;
 }
 
+/**
+ * Factory values: not calibrated (motor mode is refused until a calibration is
+ * run), default CAN id and pole pairs, nominal resistance, zero at encoder 0.
+ */
 void NvConfig_Defaults(NvConfig_t *cfg)
 {
   memset(cfg, 0, sizeof(*cfg));
@@ -45,6 +54,13 @@ void NvConfig_Defaults(NvConfig_t *cfg)
   cfg->r_ohm = FOC_MOTOR_R_OHM_DEFAULT;
 }
 
+/**
+ * Reads the struct straight from the reserved flash page (flash is memory
+ * mapped, so this is just a memcpy). It is only accepted if the magic number,
+ * version and checksum match and the values are sane. Otherwise (blank board,
+ * corrupted page, older firmware layout) the defaults are used and 0 is
+ * returned.
+ */
 uint8_t NvConfig_Load(NvConfig_t *cfg)
 {
   memcpy(cfg, (const void *)NV_PAGE_ADDR, sizeof(*cfg));
@@ -57,6 +73,17 @@ uint8_t NvConfig_Load(NvConfig_t *cfg)
   return 1u;
 }
 
+/**
+ * Writes cfg to the reserved page:
+ *  1. Fill in magic, version and checksum.
+ *  2. Unlock flash, erase the 1 KB page (all bytes become 0xFF; the CPU stalls
+ *     for ~20-40 ms while this happens).
+ *  3. Program it one 32-bit word at a time (the F0 programs 16 bits per
+ *     operation; HAL splits each word in two).
+ *  4. Lock flash and compare the page with cfg.
+ * Returns 1 only if everything succeeded and the read-back matches. If power is
+ * lost mid-write, the checksum fails at the next boot and defaults are used.
+ */
 uint8_t NvConfig_Save(NvConfig_t *cfg)
 {
   cfg->magic = NV_MAGIC;

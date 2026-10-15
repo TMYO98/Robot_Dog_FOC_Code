@@ -2,3 +2,5 @@
 *.su
 *.d
 *.o
+Debug/
+Release/

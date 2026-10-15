@@ -8,6 +8,11 @@
 
 #include "foc_math.h"
 
+/**
+ * One full sine period in 256 steps, Q15 (32767 = 1.0): entry i = sin(2*pi*i/256).
+ * Entry 256 repeats entry 0 so the interpolation in foc_sin_q15() can always read
+ * i + 1 without a wrap check. 514 bytes of flash.
+ */
 const int16_t k_foc_sin_q15[257] = {
        0,   804,  1608,  2410,  3212,  4011,  4808,  5602,  6393,  7179,  7962,  8739,
     9512, 10278, 11039, 11793, 12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530,
@@ -33,6 +38,12 @@ const int16_t k_foc_sin_q15[257] = {
    -3212, -2410, -1608,  -804,     0,
 };
 
+/**
+ * Integer square root (floor), bit by bit, the way you would do it by hand in
+ * base 4: one result bit is decided per iteration, from the top. No multiply or
+ * divide, at most 16 iterations (~150 cycles on the M0). Only used by the fast
+ * loop when the voltage vector has to be limited.
+ */
 uint32_t foc_isqrt32(uint32_t x)
 {
   uint32_t res = 0u;
